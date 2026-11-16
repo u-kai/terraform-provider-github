@@ -62,6 +62,15 @@ func resourceGithubRepositoryCollaborators() *schema.Resource {
 				Type:        schema.TypeSet,
 				Optional:    true,
 				Description: "Users to grant access to the repository.",
+				// Read stores the login as GitHub cases it, and a differing set hash would hide the
+				// pair from the username DiffSuppressFunc, so identity must ignore username case.
+				// Duplicates are rejected by diffDuplicateUsernameCheck.
+				Set: func(v any) int {
+					m, _ := v.(map[string]any)
+					username, _ := m["username"].(string)
+					permission, _ := m["permission"].(string)
+					return schema.HashString("username:" + strings.ToLower(username) + ";permission:" + permission)
+				},
 				Elem: &schema.Resource{
 					Schema: map[string]*schema.Schema{
 						"username": {
@@ -829,8 +838,10 @@ func updateUserCollaboratorsAndInvites(ctx context.Context, meta *Owner, owner, 
 	seen := make(map[string]any)
 	remove := make([]string, 0)
 
+	// GitHub logins are case-insensitive; a case-sensitive match would remove a configured
+	// collaborator whose config casing differs from the login GitHub returns.
 	for _, inUser := range inUsers {
-		lookup[inUser.login] = inUser
+		lookup[strings.ToLower(inUser.login)] = inUser
 	}
 
 	ghUsers, err := listUserCollaborators(ctx, meta, owner, repoName, ignoreUsers)
@@ -839,9 +850,10 @@ func updateUserCollaboratorsAndInvites(ctx context.Context, meta *Owner, owner, 
 	}
 
 	for _, ghUser := range ghUsers {
-		inUser, ok := lookup[ghUser.login]
+		login := strings.ToLower(ghUser.login)
+		inUser, ok := lookup[login]
 		if ok {
-			seen[ghUser.login] = nil
+			seen[login] = nil
 
 			if ghUser.permission != inUser.permission {
 				tflog.Info(ctx, fmt.Sprintf("Updating user %s permission from %s to %s for repo %s.", inUser.login, ghUser.permission, inUser.permission, repoName))
@@ -861,9 +873,10 @@ func updateUserCollaboratorsAndInvites(ctx context.Context, meta *Owner, owner, 
 	}
 
 	for _, ghInvite := range ghInvites {
-		inInvite, ok := lookup[ghInvite.login]
+		login := strings.ToLower(ghInvite.login)
+		inInvite, ok := lookup[login]
 		if ok {
-			seen[ghInvite.login] = nil
+			seen[login] = nil
 
 			if ghInvite.permission != inInvite.permission {
 				tflog.Info(ctx, fmt.Sprintf("Updating invite for user %s permission from %s to %s for repo %s.", inInvite.login, ghInvite.permission, inInvite.permission, repoName))
@@ -882,7 +895,7 @@ func updateUserCollaboratorsAndInvites(ctx context.Context, meta *Owner, owner, 
 	}
 
 	for _, inUser := range inUsers {
-		if _, ok := seen[inUser.login]; ok {
+		if _, ok := seen[strings.ToLower(inUser.login)]; ok {
 			continue
 		}
 
